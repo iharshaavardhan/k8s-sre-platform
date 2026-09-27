@@ -1,0 +1,102 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: prometheus
+data:
+  slo-rules.yml: |
+    groups:
+      # ------------------------------------------------------------------
+      # Recording rules: derive SLIs (error ratio) over multiple windows.
+      # Assumes an app exposing http_requests_total{job,code}.
+      # ------------------------------------------------------------------
+      - name: sli-recordings
+        interval: 30s
+        rules:
+          - record: job:http_requests:rate5m
+            expr: sum by (job) (rate(http_requests_total[5m]))
+          - record: job:http_errors:rate5m
+            expr: sum by (job) (rate(http_requests_total{code=~"5.."}[5m]))
+          - record: job:sli_error_ratio:ratio5m
+            expr: job:http_errors:rate5m / job:http_requests:rate5m
+          - record: job:sli_error_ratio:ratio30m
+            expr: |
+              sum by (job) (rate(http_requests_total{code=~"5.."}[30m]))
+              / sum by (job) (rate(http_requests_total[30m]))
+          - record: job:sli_error_ratio:ratio1h
+            expr: |
+              sum by (job) (rate(http_requests_total{code=~"5.."}[1h]))
+              / sum by (job) (rate(http_requests_total[1h]))
+          - record: job:sli_error_ratio:ratio6h
+            expr: |
+              sum by (job) (rate(http_requests_total{code=~"5.."}[6h]))
+              / sum by (job) (rate(http_requests_total[6h]))
+
+      # ------------------------------------------------------------------
+      # Multi-window, multi-burn-rate alerts (Google SRE workbook).
+      # SLO = 99.9% -> error budget = 0.001.
+      #   fast page:  burn 14.4x over 1h AND 5m  (2% budget in 1h)
+      #   slow ticket: burn 6x over 6h AND 30m   (5% budget in 6h)
+      # ------------------------------------------------------------------
+      - name: slo-burn-rate-alerts
+        rules:
+          - alert: SLOErrorBudgetFastBurn
+            expr: |
+              job:sli_error_ratio:ratio1h > (14.4 * 0.001)
+              and
+              job:sli_error_ratio:ratio5m > (14.4 * 0.001)
+            for: 2m
+            labels:
+              severity: critical
+              slo: availability
+            annotations:
+              summary: "Fast error-budget burn on {{ $labels.job }}"
+              description: "{{ $labels.job }} is burning error budget at >14.4x (1h & 5m windows). Paging."
+              runbook_url: "https://runbooks.example.com/SLOErrorBudgetFastBurn"
+
+          - alert: SLOErrorBudgetSlowBurn
+            expr: |
+              job:sli_error_ratio:ratio6h > (6 * 0.001)
+              and
+              job:sli_error_ratio:ratio30m > (6 * 0.001)
+            for: 15m
+            labels:
+              severity: warning
+              slo: availability
+            annotations:
+              summary: "Slow error-budget burn on {{ $labels.job }}"
+              description: "{{ $labels.job }} is burning error budget at >6x (6h & 30m windows). Open a ticket."
+              runbook_url: "https://runbooks.example.com/SLOErrorBudgetSlowBurn"
+
+  infra-rules.yml: |
+    groups:
+      - name: kubernetes-infra-alerts
+        rules:
+          - alert: KubePodCrashLooping
+            expr: |
+              increase(kube_pod_container_status_restarts_total[10m]) > 3
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is crash-looping"
+              runbook_url: "https://runbooks.example.com/KubePodCrashLooping"
+
+          - alert: KubePodNotReady
+            expr: |
+              sum by (namespace, pod) (kube_pod_status_phase{phase=~"Pending|Unknown"}) > 0
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} not ready for 15m"
+
+          - alert: NodeMemoryPressure
+            expr: kube_node_status_condition{condition="MemoryPressure",status="true"} == 1
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Node {{ $labels.node }} under memory pressure"
