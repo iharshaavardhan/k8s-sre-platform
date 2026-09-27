@@ -2,7 +2,7 @@
 
 A Kubernetes-native SRE observability and reliability stack, deployed as plain
 manifests via Kustomize. Runs on the cluster provisioned by
-[`terraform-aws-eks-platform`](https://github.com/harsva/terraform-aws-eks-platform).
+[`terraform-aws-eks-platform`](https://github.com/iharshaavardhan/terraform-aws-eks-platform).
 
 ## Components
 
